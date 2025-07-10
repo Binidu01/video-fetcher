@@ -9,6 +9,13 @@ import validators
 import logging
 from typing import List, Dict, Optional, Set
 import json
+import os
+import cv2
+from PIL import Image
+import base64
+import io
+import tempfile
+import subprocess
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -29,6 +36,10 @@ class VideoFetcher:
             'twitch.tv', 'facebook.com', 'instagram.com', 'tiktok.com',
             'twitter.com', 'x.com', 'rumble.com', 'bitchute.com'
         }
+        
+        # Create downloads directory if it doesn't exist
+        self.downloads_dir = 'downloads'
+        os.makedirs(self.downloads_dir, exist_ok=True)
 
     def fetch_videos_from_url(self, url: str) -> Dict:
         """
@@ -65,6 +76,9 @@ class VideoFetcher:
             
             # Remove duplicates
             result['videos'] = self._remove_duplicates(result['videos'])
+            
+            # Enhance video info with thumbnails and metadata
+            result['videos'] = self._enhance_video_info(result['videos'])
             
         except Exception as e:
             result['errors'].append(str(e))
@@ -256,6 +270,230 @@ class VideoFetcher:
                 unique_videos.append(video)
         
         return unique_videos
+
+    def _enhance_video_info(self, videos: List[Dict]) -> List[Dict]:
+        """
+        Enhance video information with thumbnails and metadata
+        """
+        enhanced_videos = []
+        
+        for video in videos:
+            try:
+                # Get enhanced info using yt-dlp for supported platforms
+                enhanced_info = self._get_video_metadata(video['url'])
+                if enhanced_info:
+                    video.update(enhanced_info)
+                
+                enhanced_videos.append(video)
+                
+            except Exception as e:
+                logger.error(f"Error enhancing video info for {video.get('url')}: {e}")
+                enhanced_videos.append(video)
+        
+        return enhanced_videos
+
+    def _get_video_metadata(self, url: str) -> Dict:
+        """
+        Get enhanced metadata for a video URL using yt-dlp
+        """
+        try:
+            ydl_opts = {
+                'quiet': True,
+                'no_warnings': True,
+                'extract_flat': False,
+                'writesubtitles': False,
+                'writeautomaticsub': False,
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                try:
+                    info = ydl.extract_info(url, download=False)
+                    
+                    metadata = {}
+                    
+                    # Basic info
+                    if 'title' in info:
+                        metadata['title'] = info['title']
+                    if 'duration' in info:
+                        metadata['duration'] = info['duration']
+                        metadata['duration_string'] = self._format_duration(info['duration'])
+                    if 'view_count' in info:
+                        metadata['view_count'] = info['view_count']
+                    if 'uploader' in info:
+                        metadata['uploader'] = info['uploader']
+                    if 'upload_date' in info:
+                        metadata['upload_date'] = info['upload_date']
+                    
+                    # Thumbnail
+                    if 'thumbnail' in info:
+                        metadata['thumbnail_url'] = info['thumbnail']
+                        # Generate base64 thumbnail for display
+                        thumbnail_b64 = self._get_thumbnail_base64(info['thumbnail'])
+                        if thumbnail_b64:
+                            metadata['thumbnail_base64'] = thumbnail_b64
+                    
+                    # Available formats
+                    if 'formats' in info:
+                        formats = []
+                        for fmt in info['formats']:
+                            if fmt.get('vcodec') != 'none':  # Video formats only
+                                format_info = {
+                                    'format_id': fmt.get('format_id'),
+                                    'ext': fmt.get('ext'),
+                                    'quality': fmt.get('height', 'unknown'),
+                                    'filesize': fmt.get('filesize'),
+                                    'url': fmt.get('url')
+                                }
+                                formats.append(format_info)
+                        metadata['formats'] = formats
+                    
+                    return metadata
+                    
+                except yt_dlp.DownloadError:
+                    return {}
+                    
+        except Exception as e:
+            logger.error(f"Error getting metadata for {url}: {e}")
+            return {}
+
+    def _format_duration(self, seconds: int) -> str:
+        """
+        Format duration in seconds to HH:MM:SS format
+        """
+        if seconds is None:
+            return "Unknown"
+        
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        seconds = seconds % 60
+        
+        if hours > 0:
+            return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        else:
+            return f"{minutes:02d}:{seconds:02d}"
+
+    def _get_thumbnail_base64(self, thumbnail_url: str, max_size: tuple = (200, 150)) -> str:
+        """
+        Download thumbnail and convert to base64 for display
+        """
+        try:
+            response = self.session.get(thumbnail_url, timeout=10)
+            response.raise_for_status()
+            
+            # Open image and resize
+            img = Image.open(io.BytesIO(response.content))
+            img.thumbnail(max_size, Image.Resampling.LANCZOS)
+            
+            # Convert to base64
+            buffer = io.BytesIO()
+            img.save(buffer, format='JPEG', quality=85)
+            img_str = base64.b64encode(buffer.getvalue()).decode()
+            
+            return f"data:image/jpeg;base64,{img_str}"
+            
+        except Exception as e:
+            logger.error(f"Error processing thumbnail {thumbnail_url}: {e}")
+            return ""
+
+    def download_video(self, url: str, quality: str = 'best', format_id: str = None) -> Dict:
+        """
+        Download a video from the given URL
+        """
+        try:
+            # Sanitize filename
+            ydl_opts = {
+                'format': format_id if format_id else quality,
+                'outtmpl': os.path.join(self.downloads_dir, '%(title)s.%(ext)s'),
+                'restrictfilenames': True,
+                'noplaylist': True,
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                # Get info first
+                info = ydl.extract_info(url, download=False)
+                
+                # Create safe filename
+                title = info.get('title', 'video')
+                title = re.sub(r'[<>:"/\\|?*]', '_', title)[:100]  # Limit length
+                
+                # Update output template with safe filename
+                ydl_opts['outtmpl'] = os.path.join(self.downloads_dir, f'{title}.%(ext)s')
+                
+                # Download
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl_download:
+                    ydl_download.download([url])
+                
+                # Find the downloaded file
+                downloaded_files = []
+                for file in os.listdir(self.downloads_dir):
+                    if title in file:
+                        downloaded_files.append(file)
+                
+                if downloaded_files:
+                    filepath = os.path.join(self.downloads_dir, downloaded_files[0])
+                    filesize = os.path.getsize(filepath)
+                    
+                    # Generate thumbnail from downloaded video
+                    thumbnail_path = self._generate_video_thumbnail(filepath)
+                    
+                    return {
+                        'success': True,
+                        'filename': downloaded_files[0],
+                        'filepath': filepath,
+                        'filesize': filesize,
+                        'filesize_mb': round(filesize / (1024 * 1024), 2),
+                        'thumbnail_path': thumbnail_path,
+                        'title': info.get('title', 'Unknown'),
+                        'duration': info.get('duration'),
+                        'uploader': info.get('uploader')
+                    }
+                else:
+                    return {'success': False, 'error': 'Download completed but file not found'}
+                    
+        except Exception as e:
+            logger.error(f"Error downloading video {url}: {e}")
+            return {'success': False, 'error': str(e)}
+
+    def _generate_video_thumbnail(self, video_path: str) -> str:
+        """
+        Generate thumbnail from downloaded video file
+        """
+        try:
+            # Create thumbnail filename
+            thumbnail_filename = os.path.splitext(os.path.basename(video_path))[0] + '_thumb.jpg'
+            thumbnail_path = os.path.join(self.downloads_dir, thumbnail_filename)
+            
+            # Use OpenCV to extract frame
+            cap = cv2.VideoCapture(video_path)
+            
+            # Get video duration and extract frame from middle
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            
+            if fps > 0:
+                middle_frame = total_frames // 2
+                cap.set(cv2.CAP_PROP_POS_FRAMES, middle_frame)
+            
+            ret, frame = cap.read()
+            cap.release()
+            
+            if ret:
+                # Resize frame to thumbnail size
+                height, width = frame.shape[:2]
+                if width > 300:
+                    new_width = 300
+                    new_height = int(height * (new_width / width))
+                    frame = cv2.resize(frame, (new_width, new_height))
+                
+                # Save thumbnail
+                cv2.imwrite(thumbnail_path, frame)
+                return thumbnail_path
+            else:
+                return ""
+                
+        except Exception as e:
+            logger.error(f"Error generating thumbnail for {video_path}: {e}")
+            return ""
 
     async def fetch_videos_async(self, urls: List[str]) -> List[Dict]:
         """
