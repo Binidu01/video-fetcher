@@ -71,6 +71,59 @@
             box-shadow: 0 5px 15px rgba(0,0,0,0.1);
         }
         
+        .video-thumbnail {
+            width: 120px;
+            height: 90px;
+            object-fit: cover;
+            border-radius: 8px;
+            border: 2px solid #e9ecef;
+        }
+        
+        .video-info {
+            flex-grow: 1;
+            margin-left: 15px;
+        }
+        
+        .video-duration {
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            position: absolute;
+            bottom: 5px;
+            right: 5px;
+        }
+        
+        .thumbnail-container {
+            position: relative;
+            display: inline-block;
+        }
+        
+        .download-btn {
+            background: linear-gradient(45deg, #28a745, #20c997);
+            border: none;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+        }
+        
+        .download-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(40, 167, 69, 0.3);
+        }
+        
+        .quality-selector {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 15px;
+            padding: 5px 10px;
+            font-size: 0.8rem;
+            margin-right: 10px;
+        }
+        
         .video-url {
             word-break: break-all;
             color: #667eea;
@@ -203,7 +256,18 @@
                                     <i class="fas fa-copy me-2"></i>
                                     Copy URLs
                                 </button>
+                                <button class="btn btn-outline-info ms-2" onclick="showDownloads()">
+                                    <i class="fas fa-folder me-2"></i>
+                                    View Downloads
+                                </button>
                             </div>
+                        </div>
+                        
+                        <!-- Downloads section -->
+                        <div id="downloadsList" style="display: none;">
+                            <hr class="my-4">
+                            <h5><i class="fas fa-folder-open me-2"></i>Downloaded Files</h5>
+                            <div id="downloadsContainer"></div>
                         </div>
                     </div>
                 </div>
@@ -304,12 +368,25 @@
             if (data.videos.length > 0) {
                 videosContainer.innerHTML = data.videos.map((video, index) => `
                     <div class="video-item">
-                        <div class="d-flex justify-content-between align-items-start">
-                            <div class="flex-grow-1">
+                        <div class="d-flex align-items-start">
+                            ${video.thumbnail_base64 ? `
+                                <div class="thumbnail-container">
+                                    <img src="${video.thumbnail_base64}" alt="Thumbnail" class="video-thumbnail">
+                                    ${video.duration_string ? `<span class="video-duration">${video.duration_string}</span>` : ''}
+                                </div>
+                            ` : `
+                                <div class="thumbnail-container">
+                                    <div class="video-thumbnail d-flex align-items-center justify-content-center bg-light">
+                                        <i class="fas fa-video fa-2x text-muted"></i>
+                                    </div>
+                                    ${video.duration_string ? `<span class="video-duration">${video.duration_string}</span>` : ''}
+                                </div>
+                            `}
+                            
+                            <div class="video-info">
                                 <h6 class="mb-2">
                                     <i class="fas fa-play-circle me-2"></i>
-                                    Video ${index + 1}
-                                    ${video.title ? ': ' + video.title : ''}
+                                    ${video.title || `Video ${index + 1}`}
                                 </h6>
                                 <a href="${video.url}" target="_blank" class="video-url">
                                     ${video.url}
@@ -317,12 +394,30 @@
                                 <div class="mt-2">
                                     ${video.method ? `<small class="text-muted">Method: ${video.method}</small>` : ''}
                                     ${video.type ? `<small class="text-muted ms-3">Type: ${video.type}</small>` : ''}
-                                    ${video.duration ? `<small class="text-muted ms-3">Duration: ${video.duration}s</small>` : ''}
+                                    ${video.uploader ? `<small class="text-muted ms-3">Uploader: ${video.uploader}</small>` : ''}
+                                    ${video.view_count ? `<small class="text-muted ms-3">Views: ${video.view_count.toLocaleString()}</small>` : ''}
+                                </div>
+                                <div class="mt-3">
+                                    ${video.formats && video.formats.length > 0 ? `
+                                        <select class="quality-selector" id="quality_${index}">
+                                            <option value="best">Best Quality</option>
+                                            ${video.formats.map(fmt => 
+                                                `<option value="${fmt.format_id}">${fmt.quality}p ${fmt.ext} ${fmt.filesize ? '(' + (fmt.filesize/(1024*1024)).toFixed(1) + 'MB)' : ''}</option>`
+                                            ).join('')}
+                                        </select>
+                                    ` : ''}
+                                    <button class="download-btn" onclick="downloadVideo('${video.url}', ${index})">
+                                        <i class="fas fa-download me-2"></i>
+                                        Download
+                                    </button>
                                 </div>
                             </div>
-                            <button class="btn btn-sm btn-outline-primary" onclick="copyUrl('${video.url}')">
-                                <i class="fas fa-copy"></i>
-                            </button>
+                            
+                            <div class="ms-2">
+                                <button class="btn btn-sm btn-outline-primary mb-2" onclick="copyUrl('${video.url}')">
+                                    <i class="fas fa-copy"></i>
+                                </button>
+                            </div>
                         </div>
                     </div>
                 `).join('');
@@ -362,6 +457,101 @@
             link.click();
             
             URL.revokeObjectURL(url);
+        }
+
+        async function downloadVideo(url, index) {
+            const qualitySelector = document.getElementById(`quality_${index}`);
+            const quality = qualitySelector ? qualitySelector.value : 'best';
+            
+            const button = event.target.closest('.download-btn');
+            const originalText = button.innerHTML;
+            
+            button.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Downloading...';
+            button.disabled = true;
+            
+            try {
+                const response = await fetch('/download_video', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ 
+                        url: url, 
+                        quality: quality === 'best' ? 'best' : undefined,
+                        format_id: quality !== 'best' ? quality : undefined
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.success) {
+                    button.innerHTML = '<i class="fas fa-check me-2"></i>Downloaded!';
+                    button.className = 'download-btn bg-success';
+                    
+                    // Show download link
+                    setTimeout(() => {
+                        const downloadLink = document.createElement('a');
+                        downloadLink.href = `/download_file/${data.filename}`;
+                        downloadLink.className = 'btn btn-sm btn-outline-success ms-2';
+                        downloadLink.innerHTML = '<i class="fas fa-download me-1"></i>File';
+                        downloadLink.download = data.filename;
+                        button.parentNode.appendChild(downloadLink);
+                    }, 1000);
+                    
+                } else {
+                    throw new Error(data.error || 'Download failed');
+                }
+                
+            } catch (error) {
+                button.innerHTML = '<i class="fas fa-exclamation-triangle me-2"></i>Failed';
+                button.className = 'download-btn bg-danger';
+                alert('Download error: ' + error.message);
+                
+                setTimeout(() => {
+                    button.innerHTML = originalText;
+                    button.className = 'download-btn';
+                    button.disabled = false;
+                }, 3000);
+            }
+        }
+
+        async function showDownloads() {
+            try {
+                const response = await fetch('/downloads');
+                const data = await response.json();
+                
+                const downloadsContainer = document.getElementById('downloadsContainer');
+                const downloadsList = document.getElementById('downloadsList');
+                
+                if (data.files && data.files.length > 0) {
+                    downloadsContainer.innerHTML = data.files.map(file => `
+                        <div class="video-item">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <h6 class="mb-1">
+                                        <i class="fas fa-file-video me-2"></i>
+                                        ${file.filename}
+                                    </h6>
+                                    <small class="text-muted">
+                                        Size: ${file.size_mb} MB | 
+                                        Modified: ${new Date(file.modified * 1000).toLocaleString()}
+                                    </small>
+                                </div>
+                                <a href="/download_file/${file.filename}" class="btn btn-sm btn-outline-primary" download>
+                                    <i class="fas fa-download"></i>
+                                </a>
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    downloadsContainer.innerHTML = '<p class="text-muted text-center">No downloaded files found.</p>';
+                }
+                
+                downloadsList.style.display = 'block';
+                
+            } catch (error) {
+                alert('Error loading downloads: ' + error.message);
+            }
         }
     </script>
 </body>
