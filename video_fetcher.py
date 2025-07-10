@@ -382,7 +382,11 @@ class VideoFetcher:
             
             # Open image and resize
             img = Image.open(io.BytesIO(response.content))
-            img.thumbnail(max_size, Image.Resampling.LANCZOS)
+            # Use LANCZOS if available, otherwise use ANTIALIAS for compatibility
+            try:
+                img.thumbnail(max_size, Image.Resampling.LANCZOS)
+            except AttributeError:
+                img.thumbnail(max_size, Image.ANTIALIAS)
             
             # Convert to base64
             buffer = io.BytesIO()

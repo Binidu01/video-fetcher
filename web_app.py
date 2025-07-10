@@ -9,11 +9,37 @@ app = Flask(__name__)
 app.secret_key = 'video_fetcher_secret_key'
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
+
+# Add CORS headers to all responses
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
 
 # Initialize video fetcher
 fetcher = VideoFetcher()
+
+# Error handlers
+@app.errorhandler(404)
+def not_found_error(error):
+    return jsonify({'error': 'Endpoint not found'}), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    logger.error(f"Internal server error: {error}")
+    return jsonify({'error': 'Internal server error', 'success': False}), 500
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    logger.error(f"Unhandled exception: {e}", exc_info=True)
+    return jsonify({'error': 'An unexpected error occurred', 'success': False}), 500
 
 @app.route('/')
 def index():
@@ -24,41 +50,78 @@ def index():
 def fetch_videos():
     """API endpoint to fetch videos"""
     try:
-        data = request.get_json()
+        # Handle both JSON and form data
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.form.to_dict()
+            
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+            
         url = data.get('url', '').strip()
         
         if not url:
             return jsonify({'error': 'URL is required'}), 400
         
+        logger.info(f"Fetching videos from URL: {url}")
+        
         # Fetch videos
         result = fetcher.fetch_videos_from_url(url)
         
+        # Ensure we always return valid JSON
+        if not isinstance(result, dict):
+            result = {'error': 'Invalid response format', 'videos': [], 'methods_used': []}
+        
+        logger.info(f"Successfully fetched {len(result.get('videos', []))} videos")
         return jsonify(result)
         
     except Exception as e:
-        logger.error(f"Error fetching videos: {e}")
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error fetching videos: {e}", exc_info=True)
+        return jsonify({
+            'error': str(e),
+            'videos': [],
+            'methods_used': [],
+            'errors': [str(e)]
+        }), 500
 
 @app.route('/download_video', methods=['POST'])
 def download_video():
     """API endpoint to download a video"""
     try:
-        data = request.get_json()
+        # Handle both JSON and form data
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.form.to_dict()
+            
+        if not data:
+            return jsonify({'error': 'No data provided', 'success': False}), 400
+            
         url = data.get('url', '').strip()
         quality = data.get('quality', 'best')
         format_id = data.get('format_id')
         
         if not url:
-            return jsonify({'error': 'URL is required'}), 400
+            return jsonify({'error': 'URL is required', 'success': False}), 400
+        
+        logger.info(f"Downloading video from URL: {url} with quality: {quality}")
         
         # Download video
         result = fetcher.download_video(url, quality, format_id)
         
+        # Ensure we always return valid JSON with success flag
+        if not isinstance(result, dict):
+            result = {'error': 'Invalid response format', 'success': False}
+        
         return jsonify(result)
         
     except Exception as e:
-        logger.error(f"Error downloading video: {e}")
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error downloading video: {e}", exc_info=True)
+        return jsonify({
+            'error': str(e),
+            'success': False
+        }), 500
 
 @app.route('/download_file/<filename>')
 def download_file(filename):

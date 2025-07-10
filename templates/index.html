@@ -323,7 +323,15 @@
                     body: JSON.stringify({ url: url })
                 });
                 
-                const data = await response.json();
+                let data;
+                try {
+                    data = await response.json();
+                } catch (jsonError) {
+                    console.error('JSON parse error:', jsonError);
+                    const text = await response.text();
+                    console.error('Response text:', text);
+                    throw new Error('Server returned invalid response. Please check the console for details.');
+                }
                 
                 if (response.ok) {
                     currentResults = data;
@@ -333,6 +341,7 @@
                 }
                 
             } catch (error) {
+                console.error('Fetch error:', error);
                 alert('Error: ' + error.message);
             } finally {
                 document.getElementById('loading').style.display = 'none';
@@ -482,7 +491,15 @@
                     })
                 });
                 
-                const data = await response.json();
+                let data;
+                try {
+                    data = await response.json();
+                } catch (jsonError) {
+                    console.error('JSON parse error in download:', jsonError);
+                    const text = await response.text();
+                    console.error('Response text:', text);
+                    throw new Error('Server returned invalid response during download.');
+                }
                 
                 if (response.ok && data.success) {
                     button.innerHTML = '<i class="fas fa-check me-2"></i>Downloaded!';
@@ -503,6 +520,7 @@
                 }
                 
             } catch (error) {
+                console.error('Download error:', error);
                 button.innerHTML = '<i class="fas fa-exclamation-triangle me-2"></i>Failed';
                 button.className = 'download-btn bg-danger';
                 alert('Download error: ' + error.message);
@@ -518,7 +536,16 @@
         async function showDownloads() {
             try {
                 const response = await fetch('/downloads');
-                const data = await response.json();
+                
+                let data;
+                try {
+                    data = await response.json();
+                } catch (jsonError) {
+                    console.error('JSON parse error in showDownloads:', jsonError);
+                    const text = await response.text();
+                    console.error('Response text:', text);
+                    throw new Error('Server returned invalid response when loading downloads.');
+                }
                 
                 const downloadsContainer = document.getElementById('downloadsContainer');
                 const downloadsList = document.getElementById('downloadsList');
@@ -550,6 +577,7 @@
                 downloadsList.style.display = 'block';
                 
             } catch (error) {
+                console.error('Error loading downloads:', error);
                 alert('Error loading downloads: ' + error.message);
             }
         }
